@@ -1,0 +1,8 @@
+ID,名前,メールアドレス,作成日,有効
+1,田中太郎,tanaka@example.com,2024/01/15,○
+2,山田花子,yamada@example.com,2024-02-20,はい
+3,佐藤次郎,,2023年12月01日,1
+4,鈴木一郎,suzuki@example.com,2024/03/10,×
+5,,missing@example.com,2024/04/01,yes
+6,高橋三郎,takahashi@example.com,invalid-date,○
+7,伊藤四郎,ito@example.com,2024/05/15,○
