@@ -1,0 +1,72 @@
+{
+  "$schema": "./mapping_config_schema.json",
+  "_comment": "データ移行ツール - マッピング設定ファイル",
+
+  "table_name": "m_employee",
+
+  "fields": {
+    "emp_id": {
+      "source": "社員番号",
+      "type": "str",
+      "required": true,
+      "max_len": 20,
+      "oracle_type": "VARCHAR2(20)",
+      "pg_type": "VARCHAR(20)"
+    },
+    "full_name": {
+      "source": "氏名",
+      "type": "str",
+      "required": true,
+      "max_len": 100,
+      "oracle_type": "NVARCHAR2(100)",
+      "pg_type": "VARCHAR(100)"
+    },
+    "department": {
+      "source": "部署",
+      "type": "str",
+      "required": false,
+      "max_len": 50,
+      "default": null,
+      "oracle_type": "NVARCHAR2(50)",
+      "pg_type": "VARCHAR(50)"
+    },
+    "email": {
+      "source": "メールアドレス",
+      "type": "str",
+      "required": false,
+      "max_len": 254,
+      "oracle_type": "NVARCHAR2(254)",
+      "pg_type": "VARCHAR(254)"
+    },
+    "hire_date": {
+      "source": "入社年月日",
+      "type": "date",
+      "required": false,
+      "oracle_type": "DATE",
+      "pg_type": "DATE"
+    },
+    "salary": {
+      "source": "基本給",
+      "type": "int",
+      "required": false,
+      "default": 0,
+      "oracle_type": "NUMBER(10)",
+      "pg_type": "INTEGER"
+    },
+    "rating": {
+      "source": "評価スコア",
+      "type": "float",
+      "required": false,
+      "oracle_type": "NUMBER(5,2)",
+      "pg_type": "NUMERIC(5,2)"
+    },
+    "is_active": {
+      "source": "在籍フラグ",
+      "type": "bool",
+      "required": false,
+      "default": true,
+      "oracle_type": "NUMBER(1)",
+      "pg_type": "BOOLEAN"
+    }
+  }
+}

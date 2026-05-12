@@ -2,7 +2,7 @@
 
 デスクトップアプリの正規エクスポートデータを、ウェブアプリ用データベース（Oracle / PostgreSQL）にインポート可能な形式へ安全に変換するクロスプラットフォーム対応ツールです。
 
-**Python版** と **Java版** の2言語実装を提供しています。
+**Python版** と **Java版** の2言語実装を提供。**外部設定ファイル（JSON）でマッピングを定義**するため、コード変更なしに任意のテーブルに対応できます。
 
 ---
 
@@ -13,11 +13,10 @@
 - [Architecture](#architecture)
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
+- [Configuration File](#configuration-file)
 - [Usage — Python](#usage--python)
 - [Usage — Java](#usage--java)
 - [Supported Formats](#supported-formats)
-- [Customization](#customization)
-- [Sample Data](#sample-data)
 - [Error Handling](#error-handling)
 - [License](#license)
 
@@ -27,14 +26,15 @@
 
 | 機能 | 説明 |
 |------|------|
+| **設定ファイル駆動** | `mapping_config.json` でマッピングを定義。コード変更不要で任意のテーブルに対応 |
 | **マルチフォーマット入力** | CSV, TSV, JSON, XML を自動判別して読み込み |
-| **文字コード自動判定** | UTF-8 (BOM有無), UTF-16, Shift-JIS (CP932/MS932), EUC-JP に対応。Windows/Mac/Linux 混在環境を想定 |
+| **文字コード自動判定** | UTF-8 (BOM有無), UTF-16, Shift-JIS (CP932/MS932), EUC-JP に対応 |
 | **バリデーション** | 型チェック（文字列・整数・浮動小数点・日付・真偽値）、必須チェック、最大長チェック |
-| **Oracle SQL 出力** | `N'...'` リテラル、`TO_DATE()` 関数、`NUMBER(1)` 真偽値など Oracle 固有構文に対応 |
-| **PostgreSQL SQL 出力** | `::DATE` キャスト、`BOOLEAN` 型、`BEGIN/COMMIT` トランザクションに対応 |
-| **JSON 出力** | 整形済み JSON ファイルとして出力（API インポート用） |
+| **Oracle SQL 出力** | `N'...'` リテラル、`TO_DATE()` 関数、`NUMBER(1)` 真偽値など Oracle 固有構文 |
+| **PostgreSQL SQL 出力** | `::DATE` キャスト、`BOOLEAN` 型、`BEGIN/COMMIT` トランザクション |
+| **JSON 出力** | 整形済み JSON ファイル（API インポート用） |
 | **DDL 生成** | `CREATE TABLE` 文を Oracle / PostgreSQL それぞれの方言で自動生成 |
-| **エラーログ** | バリデーション失敗行をスキップし、詳細なエラーログを出力 |
+| **エラーログ** | バリデーション失敗行をスキップし、詳細なエラーログを別ファイルに出力 |
 | **外部依存なし** | Python: 標準ライブラリのみ / Java: 外部ライブラリ不要 |
 
 ---
@@ -58,37 +58,44 @@
 
 ```
 data-migration-tool/
-├── migrate.py                                  # Python版（単一ファイル）
-├── java/
-│   └── src/main/java/migration/
-│       ├── DataMigrationTool.java              # Java版メイン
-│       └── SimpleJsonParser.java               # 軽量JSONパーサー
-├── sample_data.csv                             # テスト用サンプル（CSV）
-├── sample_data.tsv                             # テスト用サンプル（TSV）
-├── sample_data.json                            # テスト用サンプル（JSON）
-├── sample_data.xml                             # テスト用サンプル（XML）
+├── mapping_config.json                         # マッピング設定ファイル（★ ユーザー編集）
+├── migrate.py                                  # Python版
+├── java/src/main/java/migration/
+│   ├── DataMigrationTool.java                  # Java版メイン
+│   └── SimpleJsonParser.java                   # 軽量JSONパーサー
+├── sample_employee.csv                         # テスト用サンプル（CSV）
+├── sample_employee.json                        # テスト用サンプル（JSON）
+├── sample_data.csv / .tsv / .json / .xml       # 汎用テスト用サンプル
 └── README.md
 ```
 
 ### 処理フロー
 
 ```
-┌─────────────────┐     ┌───────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  入力ファイル     │ ──→ │ 文字コード判定  │ ──→ │  パース & 正規化  │ ──→ │  バリデーション   │
-│ CSV/TSV/JSON/XML│     │ UTF-8/SJIS/…  │     │  FIELD_MAP適用   │     │  型・必須・長さ   │
-└─────────────────┘     └───────────────┘     └──────────────────┘     └────────┬────────┘
-                                                                                │
-                                                              ┌─────────────────┼─────────────────┐
-                                                              ▼                 ▼                 ▼
-                                                     ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-                                                     │  JSON出力     │  │ Oracle SQL   │  │ PostgreSQL   │
-                                                     │  (API用)     │  │ INSERT文     │  │ INSERT文     │
-                                                     └──────────────┘  └──────────────┘  └──────────────┘
-                                                                                │
-                                                                       ┌──────────────┐
-                                                                       │ errors.log   │
-                                                                       │ (スキップ行)  │
-                                                                       └──────────────┘
+┌──────────────────┐     ┌──────────────────┐
+│ mapping_config   │     │  入力ファイル      │
+│    .json         │     │ CSV/TSV/JSON/XML  │
+└───────┬──────────┘     └────────┬──────────┘
+        │                         │
+        ▼                         ▼
+┌──────────────────────────────────────────────┐
+│              マッピングエンジン                 │
+│  ┌────────────┐  ┌──────────┐  ┌───────────┐ │
+│  │ 文字コード  │→│ パース &  │→│ バリデー   │ │
+│  │ 自動判定   │  │ 正規化   │  │ ション    │ │
+│  └────────────┘  └──────────┘  └─────┬─────┘ │
+└──────────────────────────────────────┼───────┘
+                      ┌────────────────┼────────────────┐
+                      ▼                ▼                ▼
+             ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+             │  JSON 出力   │  │ Oracle SQL   │  │ PostgreSQL   │
+             │  (API用)     │  │ INSERT文     │  │ INSERT文     │
+             └──────────────┘  └──────────────┘  └──────────────┘
+                                                         │
+                                                ┌──────────────┐
+                                                │ errors.log   │
+                                                │ (スキップ行)  │
+                                                └──────────────┘
 ```
 
 ---
@@ -96,13 +103,11 @@ data-migration-tool/
 ## Requirements
 
 ### Python版
-
 - **Python 3.10+**
 - 外部ライブラリ不要（`chardet` がインストール済みならフォールバック判定に使用）
 
 ### Java版
-
-- **JDK 17+**（record, switch式, テキストブロック使用のため）
+- **JDK 17+**（record, switch式使用のため）
 - 外部ライブラリ不要
 
 ---
@@ -110,26 +115,128 @@ data-migration-tool/
 ## Quick Start
 
 ```bash
-# リポジトリのクローン
 git clone https://github.com/<your-username>/data-migration-tool.git
 cd data-migration-tool
 
+# 1. mapping_config.json を移行先DB仕様に合わせて編集
+# 2. 実行
+
 # === Python版 ===
-# CSV → PostgreSQL INSERT文
-python migrate.py sample_data.csv -f sql -d postgresql -t users -o output_pg.sql
-
-# JSON → Oracle INSERT文 + CREATE TABLE文
-python migrate.py sample_data.json -f sql -d oracle -t users -o output_ora.sql --create-table ddl_ora.sql
-
-# XML → JSON（API用）
-python migrate.py sample_data.xml -f json -o output.json
+python migrate.py export.csv -c mapping_config.json -f sql -d postgresql -o import.sql
 
 # === Java版 ===
-# コンパイル
 javac -encoding UTF-8 -d java/out java/src/main/java/migration/*.java
+java -cp java/out migration.DataMigrationTool export.csv -c mapping_config.json -f sql -d oracle -o import.sql
+```
 
-# TSV → PostgreSQL INSERT文
-java -cp java/out migration.DataMigrationTool sample_data.tsv -f sql -d postgresql -t users -o output_pg.sql
+---
+
+## Configuration File
+
+`mapping_config.json` でマッピングを定義します。**コードを一切変更せず**、このファイルを書き換えるだけで任意のテーブルに対応できます。
+
+### 設定ファイルの構造
+
+```json
+{
+  "table_name": "m_employee",
+
+  "fields": {
+    "DBカラム名": {
+      "source":      "元データのヘッダー名",
+      "type":        "str | int | float | date | bool",
+      "required":    true,
+      "max_len":     100,
+      "default":     null,
+      "oracle_type": "NVARCHAR2(100)",
+      "pg_type":     "VARCHAR(100)"
+    }
+  }
+}
+```
+
+### 各プロパティの説明
+
+| プロパティ | 必須 | 型 | 説明 |
+|-----------|------|-----|------|
+| `table_name` | - | string | SQL出力時のテーブル名（`-t` 引数で上書き可能） |
+| `fields` | 必須 | object | フィールドマッピング定義 |
+
+#### fields 内の各フィールド
+
+| プロパティ | 必須 | デフォルト | 説明 |
+|-----------|------|-----------|------|
+| `source` | 必須 | - | 元データ（CSV等）のカラム名/ヘッダー名 |
+| `type` | - | `"str"` | データ型: `str`, `int`, `float`, `date`, `bool` |
+| `required` | - | `false` | `true` = NOT NULL（空値でエラー） |
+| `max_len` | - | 制限なし | str型の最大文字数 |
+| `default` | - | `null` | 値が空の場合のデフォルト値 |
+| `oracle_type` | - | `VARCHAR2(255)` | Oracle用のCREATE TABLE型名 |
+| `pg_type` | - | `VARCHAR(255)` | PostgreSQL用のCREATE TABLE型名 |
+
+### サンプル設定ファイル（同梱）
+
+```json
+{
+  "table_name": "m_employee",
+
+  "fields": {
+    "emp_id": {
+      "source": "社員番号",
+      "type": "str",
+      "required": true,
+      "max_len": 20,
+      "oracle_type": "VARCHAR2(20)",
+      "pg_type": "VARCHAR(20)"
+    },
+    "full_name": {
+      "source": "氏名",
+      "type": "str",
+      "required": true,
+      "max_len": 100,
+      "oracle_type": "NVARCHAR2(100)",
+      "pg_type": "VARCHAR(100)"
+    },
+    "hire_date": {
+      "source": "入社年月日",
+      "type": "date",
+      "required": false,
+      "oracle_type": "DATE",
+      "pg_type": "DATE"
+    },
+    "salary": {
+      "source": "基本給",
+      "type": "int",
+      "required": false,
+      "default": 0,
+      "oracle_type": "NUMBER(10)",
+      "pg_type": "INTEGER"
+    },
+    "is_active": {
+      "source": "在籍フラグ",
+      "type": "bool",
+      "required": false,
+      "default": true,
+      "oracle_type": "NUMBER(1)",
+      "pg_type": "BOOLEAN"
+    }
+  }
+}
+```
+
+### 別のテーブルを移行するには？
+
+設定ファイルを複数用意するだけです：
+
+```bash
+# 社員テーブル
+python migrate.py employees.csv -c config_employee.json -f sql -d postgresql -o emp.sql
+
+# 商品テーブル
+python migrate.py products.csv -c config_product.json -f sql -d oracle -o prod.sql
+
+# 受注テーブル
+python migrate.py orders.xml -c config_order.json -f json -o orders.json
 ```
 
 ---
@@ -137,35 +244,36 @@ java -cp java/out migration.DataMigrationTool sample_data.tsv -f sql -d postgres
 ## Usage — Python
 
 ```
-python migrate.py <入力ファイル> [オプション]
+python migrate.py <入力ファイル> -c <設定ファイル> [オプション]
 ```
 
 ### オプション一覧
 
-| オプション | デフォルト | 説明 |
-|-----------|-----------|------|
-| `-o`, `--output` | `output.json` | 出力ファイルパス |
-| `-f`, `--format` | `json` | 出力形式 (`json` \| `sql`) |
-| `-d`, `--dialect` | `postgresql` | SQL方言 (`oracle` \| `postgresql`) |
-| `-e`, `--error-log` | `errors.log` | エラーログ出力先 |
-| `-t`, `--table` | `imported_data` | SQL出力時のテーブル名 |
-| `--create-table` | *(なし)* | CREATE TABLE文の出力先パス |
-| `-v`, `--verbose` | `false` | 詳細ログを表示 |
+| オプション | 必須 | デフォルト | 説明 |
+|-----------|------|-----------|------|
+| `-c`, `--config` | **必須** | - | マッピング設定ファイルパス (JSON) |
+| `-o`, `--output` | - | `output.json` | 出力ファイルパス |
+| `-f`, `--format` | - | `json` | 出力形式 (`json` \| `sql`) |
+| `-d`, `--dialect` | - | `postgresql` | SQL方言 (`oracle` \| `postgresql`) |
+| `-e`, `--error-log` | - | `errors.log` | エラーログ出力先 |
+| `-t`, `--table` | - | 設定ファイルの値 | テーブル名（設定ファイルの `table_name` を上書き） |
+| `--create-table` | - | *(なし)* | CREATE TABLE文の出力先パス |
+| `-v`, `--verbose` | - | `false` | 詳細ログを表示 |
 
 ### 実行例
 
 ```bash
-# PostgreSQL用SQL（トランザクション付き）
-python migrate.py export.csv -f sql -d postgresql -t users -o import.sql
+# PostgreSQL用INSERT文 + DDL
+python migrate.py export.csv -c mapping_config.json -f sql -d postgresql -t users -o import.sql --create-table ddl.sql
 
-# Oracle用SQL + DDL
-python migrate.py export.xml -f sql -d oracle -t users -o import.sql --create-table ddl.sql
+# Oracle用INSERT文
+python migrate.py export.xml -c mapping_config.json -f sql -d oracle -o import.sql
 
-# JSON出力（WebアプリAPI連携用）
-python migrate.py export.tsv -f json -o records.json
+# JSON出力（WebアプリAPI用）
+python migrate.py export.tsv -c mapping_config.json -f json -o records.json
 
-# 詳細ログ付き
-python migrate.py export.csv -f sql -d postgresql -t users -o import.sql -v
+# テーブル名を引数で上書き
+python migrate.py export.csv -c mapping_config.json -f sql -d postgresql -t custom_table -o import.sql
 ```
 
 ---
@@ -177,19 +285,20 @@ python migrate.py export.csv -f sql -d postgresql -t users -o import.sql -v
 javac -encoding UTF-8 -d java/out java/src/main/java/migration/*.java
 
 # 実行
-java -cp java/out migration.DataMigrationTool <入力ファイル> [オプション]
+java -cp java/out migration.DataMigrationTool <入力ファイル> -c <設定ファイル> [オプション]
 ```
 
 ### オプション一覧
 
-| オプション | デフォルト | 説明 |
-|-----------|-----------|------|
-| `-o` | `output.json` | 出力ファイルパス |
-| `-f` | `json` | 出力形式 (`json` \| `sql`) |
-| `-d` | `postgresql` | SQL方言 (`oracle` \| `postgresql`) |
-| `-e` | `errors.log` | エラーログ出力先 |
-| `-t` | `imported_data` | SQL出力時のテーブル名 |
-| `--create-table` | *(なし)* | CREATE TABLE文の出力先パス |
+| オプション | 必須 | デフォルト | 説明 |
+|-----------|------|-----------|------|
+| `-c` | **必須** | - | マッピング設定ファイルパス (JSON) |
+| `-o` | - | `output.json` | 出力ファイルパス |
+| `-f` | - | `json` | 出力形式 (`json` \| `sql`) |
+| `-d` | - | `postgresql` | SQL方言 (`oracle` \| `postgresql`) |
+| `-e` | - | `errors.log` | エラーログ出力先 |
+| `-t` | - | 設定ファイルの値 | テーブル名 |
+| `--create-table` | - | *(なし)* | CREATE TABLE文の出力先パス |
 
 ---
 
@@ -213,13 +322,13 @@ java -cp java/out migration.DataMigrationTool <入力ファイル> [オプショ
 | Shift-JIS (CP932/MS932) | 旧WindowsアプリのCSV出力 |
 | EUC-JP | 一部のLinux/Unix環境 |
 
-### 出力形式
+### 出力例
 
 #### Oracle SQL
 
 ```sql
-INSERT INTO users (id, name, email, created_at, is_active)
-VALUES (1, N'田中太郎', N'tanaka@example.com', TO_DATE('2024-01-15', 'YYYY-MM-DD'), 1);
+INSERT INTO m_employee (emp_id, full_name, hire_date, salary, is_active)
+VALUES (N'EMP001', N'田中太郎', TO_DATE('2020-04-01', 'YYYY-MM-DD'), 350000, 1);
 COMMIT;
 ```
 
@@ -227,8 +336,8 @@ COMMIT;
 
 ```sql
 BEGIN;
-INSERT INTO users (id, name, email, created_at, is_active)
-VALUES (1, '田中太郎', 'tanaka@example.com', '2024-01-15'::DATE, TRUE);
+INSERT INTO m_employee (emp_id, full_name, hire_date, salary, is_active)
+VALUES ('EMP001', '田中太郎', '2020-04-01'::DATE, 350000, TRUE);
 COMMIT;
 ```
 
@@ -237,97 +346,56 @@ COMMIT;
 ```json
 [
   {
-    "id": 1,
-    "name": "田中太郎",
-    "email": "tanaka@example.com",
-    "created_at": "2024-01-15",
+    "emp_id": "EMP001",
+    "full_name": "田中太郎",
+    "hire_date": "2020-04-01",
+    "salary": 350000,
     "is_active": true
   }
 ]
 ```
 
----
+### 自動変換対応
 
-## Customization
+#### 日付形式
 
-### FIELD_MAP の編集
+| 入力例 | 変換結果 |
+|--------|---------|
+| `2024-01-15` | `2024-01-15` |
+| `2024/01/15` | `2024-01-15` |
+| `2024年01月15日` | `2024-01-15` |
+| `01/15/2024` | `2024-01-15` |
 
-Python版の `migrate.py` 内、Java版の `DataMigrationTool.java` 内にある `FIELD_MAP` を、実際のDB構造に合わせて編集してください。
+#### 真偽値
 
-```python
-# Python版の例
-FIELD_MAP = {
-    "移行先カラム名": {
-        "source":      "元データのカラム名",   # エクスポートファイル側のヘッダー名
-        "type":        "str",                # str | int | float | date | bool
-        "required":    True,                 # 必須項目か
-        "default":     None,                 # 値がない場合のデフォルト
-        "max_len":     200,                  # str型の最大文字数（0=制限なし）
-        "oracle_type": "NVARCHAR2(200)",     # Oracle用のDDL型
-        "pg_type":     "VARCHAR(200)",       # PostgreSQL用のDDL型
-    },
-}
-```
-
-### 日付フォーマットの追加
-
-`convert_value` 関数内の日付パターンリストに追加可能です:
-
-```python
-# Python版
-for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y年%m月%d日", "%m/%d/%Y", "%d/%m/%Y"):
-```
-
-### 真偽値の判定
-
-日本語環境でよく使われる表記に対応済みです:
-
-| True | False |
-|------|-------|
+| True として認識 | False として認識 |
+|----------------|-----------------|
 | `true`, `1`, `yes`, `○`, `はい` | `false`, `0`, `no`, `×`, `いいえ` |
-
----
-
-## Sample Data
-
-リポジトリに同梱のサンプルデータで動作確認ができます:
-
-| ファイル | 内容 |
-|---------|------|
-| `sample_data.csv` | CSV形式・7行（うち2行はバリデーションエラー） |
-| `sample_data.tsv` | TSV形式・3行 |
-| `sample_data.json` | JSON配列形式・3行 |
-| `sample_data.xml` | XML形式・3行 |
-
-```bash
-# 全形式テスト（Python版）
-python migrate.py sample_data.csv  -f sql -d postgresql -t users -o test_csv.sql
-python migrate.py sample_data.tsv  -f sql -d oracle     -t users -o test_tsv.sql
-python migrate.py sample_data.json -f json -o test_json.json
-python migrate.py sample_data.xml  -f json -o test_xml.json
-```
 
 ---
 
 ## Error Handling
 
-バリデーションエラーのある行はスキップされ、処理は中断しません。
+バリデーションエラーのある行は **スキップ** され、処理全体は中断しません。
 
 ### エラーログの例 (`errors.log`)
 
 ```
-行5: 'name' は必須項目です
-行6: 'created_at' の日付形式を認識できません: 'invalid-date'
+行5: 'full_name' は必須項目です
+行8: 'hire_date' の日付形式を認識できません: 'invalid-date'
+行12: 'email' が最大長 254 を超えています (300文字)
 ```
 
 ### 実行サマリー
 
 ```
-18:00:25 [INFO] 入力ファイル読み込み中: sample_data.csv
-18:00:25 [INFO] 検出した文字コード: utf-8 (sample_data.csv)
-18:00:25 [INFO] 読み込み件数: 7
-18:00:25 [WARNING] エラー件数: 2 → errors.log
-18:00:25 [INFO] 完了: 全7件 / 成功5件 / スキップ2件
+00:18:11 [INFO] 設定ファイル読み込み完了: mapping_config.json (テーブル: m_employee, フィールド数: 8)
+00:18:11 [INFO] 入力ファイル読み込み中: sample_employee.csv
+00:18:11 [INFO] 検出した文字コード: utf-8 (sample_employee.csv)
+00:18:11 [INFO] 読み込み件数: 5
+00:18:11 [INFO] SQL出力 (PostgreSQL): import.sql (4件)
+00:18:11 [WARNING] エラー件数: 1 → errors.log
+00:18:11 [INFO] 完了: 全5件 / 成功4件 / スキップ1件
 ```
 
 ---

@@ -1,0 +1,265 @@
+============================================================
+  DataMigrationTool v1.0.0 説明書
+  汎用データ移行ツール（設定ファイル駆動 / CLI 対応）
+============================================================
+
+■ ソフト名
+  DataMigrationTool
+
+■ バージョン
+  1.0.0
+
+■ 作者名
+  highdefinitionaudiodriver
+
+■ 連絡先
+  GitHub: https://github.com/highdefinitionaudiodriver/data-migration-tool
+  バグ報告・機能要望: highdefinitionaudiodriver@gmail.com
+
+■ 動作環境
+  対応OS: Windows 10 / 11（64bit推奨）
+          macOS, Linux（ソースから実行可）
+  必要メモリ: 256MB以上
+  ディスク容量: 約10MB（EXE単体）
+  ランタイム: 不要（EXE版は同梱済み。ソース版はPython 3.10以上）
+
+■ ソフト種別
+  フリーソフト（MITライセンス）
+
+■ カテゴリ
+  プログラミング > データ変換・移行ツール
+
+■ 概要
+  DataMigrationToolは、デスクトップアプリケーションの正規
+  エクスポート機能で出力されたデータファイル（CSV, TSV, JSON,
+  XML）を、ウェブアプリケーション用データベース（Oracle /
+  PostgreSQL）にインポート可能な形式へ安全に変換するCLIツール
+  です。
+
+  マッピング定義を外部設定ファイル（JSON）で管理するため、
+  プログラムを書き換えることなく任意のテーブル構造に対応
+  できます。設定ファイルを差し替えるだけで、社員テーブル、
+  商品テーブル、受注テーブルなど、さまざまなデータ移行に
+  利用可能です。
+
+  Python版に加え、Java版のソースコードも同梱しています。
+
+■ コンプライアンス方針
+  本ツールは以下のコンプライアンスルールを厳守して設計
+  されています。
+
+  1. リバースエンジニアリングの禁止
+     実行ファイル（.exe, .app, ELF）、ライブラリ（.dll,
+     .dylib, .so）、暗号化された独自ファイルの解析・復号・
+     メモリ読取は一切行いません。
+
+  2. 正規の出力データのみを使用（ホワイトアプローチ）
+     入力元は、ユーザー自身が元のソフトウェアの正規
+     エクスポート機能で出力したファイルのみです。
+
+  3. UIや名称の模倣禁止
+     元ソフトウェアの画面デザインのコピーや、商標に抵触
+     する名称のハードコードは行いません。
+
+■ 主な機能
+
+  【設定ファイル駆動】
+  ・mapping_config.json でマッピングを定義
+  ・コード変更なしで任意のテーブル構造に対応
+  ・テーブル名、カラム名、型、必須チェック、最大文字数、
+    デフォルト値をすべてJSONで設定可能
+  ・設定ファイルを複数用意すれば複数テーブルの移行に対応
+
+  【マルチフォーマット入力】
+  ・CSV（カンマ区切り、クォート対応）
+  ・TSV（タブ区切り）
+  ・JSON（配列形式、またはrecordsキー付きオブジェクト）
+  ・XML（ルート要素直下の子要素をレコードとして処理）
+  ・区切り文字の自動判定
+
+  【文字コード自動判定】
+  ・UTF-8（BOM有/無）
+  ・UTF-16（LE/BE）
+  ・Shift-JIS（CP932）... Windows日本語環境
+  ・EUC-JP ... 一部のLinux/Unix環境
+  ・chardetライブラリによるフォールバック判定（任意）
+  ※ Windows/Mac/Linux混在環境を想定した設計
+
+  【Oracle SQL / PostgreSQL SQL 出力】
+  ・Oracle:
+    - N'...' リテラル（NVARCHAR対応）
+    - TO_DATE() 関数による日付変換
+    - NUMBER(1) による真偽値（1/0）
+    - 末尾 COMMIT
+  ・PostgreSQL:
+    - '...'::DATE キャスト
+    - BOOLEAN型（TRUE/FALSE）
+    - BEGIN/COMMIT トランザクション囲み
+
+  【JSON出力】
+  ・整形済みJSONファイルとして出力（API連携用）
+
+  【CREATE TABLE文の自動生成】
+  ・設定ファイルの型定義に基づき、Oracle / PostgreSQL
+    それぞれの方言でDDLを自動生成（参考用）
+
+  【バリデーション（検証）】
+  ・型チェック: 文字列、整数、浮動小数点、日付、真偽値
+  ・必須チェック: NOT NULL相当のフィールド検証
+  ・文字数チェック: VARCHAR桁数超過の検出
+  ・エラー行はスキップし、処理全体は中断しない
+  ・詳細なエラーログを errors.log に出力
+
+  【日付形式の自動正規化】
+  ・対応形式:
+    2024-01-15      → 2024-01-15
+    2024/01/15      → 2024-01-15
+    2024年01月15日  → 2024-01-15
+    01/15/2024      → 2024-01-15
+
+  【真偽値の自動変換】
+  ・TRUE として認識: true, 1, yes, ○, はい
+  ・FALSE として認識: false, 0, no, ×, いいえ
+
+■ インストール方法
+
+  【EXE版（推奨・簡単）】
+  1. DataMigrationTool.exe をダウンロード
+  2. 任意のフォルダに配置（インストーラ不要）
+  3. コマンドプロンプトから実行
+  ※ Pythonやその他ランタイムのインストールは不要です。
+
+  【ソース版（Python）】
+  1. Python 3.10 以上をインストール
+  2. migrate.py を任意のフォルダに配置
+  3. python migrate.py で実行
+  ※ 外部ライブラリのインストールは不要です
+    （標準ライブラリのみ使用）
+
+  【ソース版（Java）】
+  1. JDK 17 以上をインストール
+  2. java/ フォルダ内のソースをコンパイル:
+     javac -encoding UTF-8 -d out java/src/main/java/migration/*.java
+  3. java -cp out migration.DataMigrationTool で実行
+
+■ 使い方
+
+  【基本的な使い方】
+  1. mapping_config.json を移行先DB仕様に合わせて編集
+  2. DataMigrationTool.exe を実行
+
+  【コマンド書式】
+  DataMigrationTool.exe <入力ファイル> -c <設定ファイル> [オプション]
+
+  【実行例】
+
+  CSV → PostgreSQL INSERT文:
+    DataMigrationTool.exe export.csv -c mapping_config.json ^
+      -f sql -d postgresql -o import.sql
+
+  XML → Oracle INSERT文 + CREATE TABLE文:
+    DataMigrationTool.exe export.xml -c mapping_config.json ^
+      -f sql -d oracle -o import.sql --create-table ddl.sql
+
+  JSON → JSON変換（API連携用）:
+    DataMigrationTool.exe export.json -c mapping_config.json ^
+      -f json -o records.json
+
+  テーブル名を引数で上書き:
+    DataMigrationTool.exe export.csv -c mapping_config.json ^
+      -f sql -d postgresql -t custom_table -o import.sql
+
+  【オプション一覧】
+    -c, --config       : マッピング設定ファイル（必須）
+    -o, --output       : 出力ファイルパス
+                         （デフォルト: output.json）
+    -f, --format       : 出力形式 json / sql
+                         （デフォルト: json）
+    -d, --dialect      : SQL方言 oracle / postgresql
+                         （デフォルト: postgresql）
+    -e, --error-log    : エラーログ出力先
+                         （デフォルト: errors.log）
+    -t, --table        : テーブル名
+                         （省略時は設定ファイルの値を使用）
+    --create-table     : CREATE TABLE文の出力先
+                         （省略時は出力しない）
+    -v, --verbose      : 詳細ログを表示
+
+  【設定ファイルの書き方】
+  mapping_config.json の構造:
+
+    {
+      "table_name": "テーブル名",
+      "fields": {
+        "DBカラム名": {
+          "source":      "元データのヘッダー名",
+          "type":        "str / int / float / date / bool",
+          "required":    true または false,
+          "max_len":     最大文字数（str型のみ）,
+          "default":     デフォルト値（null可）,
+          "oracle_type": "Oracle用の型名",
+          "pg_type":     "PostgreSQL用の型名"
+        }
+      }
+    }
+
+  【複数テーブルの移行】
+  設定ファイルを複数用意するだけで対応できます:
+
+    DataMigrationTool.exe employees.csv -c config_employee.json ^
+      -f sql -d postgresql -o emp.sql
+    DataMigrationTool.exe products.csv -c config_product.json ^
+      -f sql -d oracle -o prod.sql
+
+■ ファイル構成（EXE版）
+  DataMigrationTool.exe       - 実行ファイル（これだけで動作）
+  DataMigrationTool説明書.txt - 本説明書
+  mapping_config.json         - マッピング設定ファイル（サンプル）
+
+■ ファイル構成（ソース版）
+  migrate.py                  - Python版メインスクリプト
+  mapping_config.json         - マッピング設定ファイル（サンプル）
+  java/src/main/java/migration/
+    DataMigrationTool.java    - Java版メインクラス
+    SimpleJsonParser.java     - 軽量JSONパーサー（外部依存なし）
+  sample_employee.csv         - テスト用サンプル（CSV）
+  sample_employee.json        - テスト用サンプル（JSON）
+  sample_data.csv             - 汎用テスト用サンプル（CSV）
+  sample_data.tsv             - 汎用テスト用サンプル（TSV）
+  sample_data.json            - 汎用テスト用サンプル（JSON）
+  sample_data.xml             - 汎用テスト用サンプル（XML）
+  README.md                   - GitHub用ドキュメント
+
+■ アンインストール方法
+  フォルダごと削除してください。
+  レジストリへの書き込みは一切行いません。
+
+■ 免責事項
+  本ソフトウェアの使用により生じたいかなる損害に対しても、
+  作者は一切の責任を負いません。
+  自己責任にてご利用ください。
+
+  特に、データ移行作業においては、移行先DBへの投入前に
+  出力されたSQLファイルの内容を必ず確認してください。
+
+■ 著作権・ライセンス
+  Copyright (c) 2026 highdefinitionaudiodriver
+  MITライセンスに基づき自由に使用・改変・再配布できます。
+  詳細はLICENSEファイルを参照してください。
+
+■ 変更履歴
+
+  v1.0.0 (2026-03-28)
+    - 初版リリース
+    - 外部設定ファイル（JSON）によるマッピング定義
+    - CSV / TSV / JSON / XML 入力対応
+    - Oracle SQL / PostgreSQL SQL / JSON 出力対応
+    - CREATE TABLE文自動生成機能
+    - 文字コード自動判定（UTF-8, Shift-JIS, EUC-JP等）
+    - 日付形式の自動正規化（和式表記対応）
+    - 真偽値の自動変換（○/はい/1 等）
+    - エラー行スキップ＋エラーログ出力
+    - Python版 / Java版の2言語実装
+    - Windows EXE版（Python不要で動作）
+
+============================================================

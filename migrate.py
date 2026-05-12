@@ -9,6 +9,7 @@
 
 対応入力: CSV, TSV, JSON, XML
 対応出力: JSON, Oracle SQL, PostgreSQL SQL
+マッピング: 外部設定ファイル（mapping_config.json）で定義
 """
 
 import argparse
@@ -20,6 +21,44 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+
+# ============================================================
+# 設定ファイル読み込み
+# ============================================================
+
+def load_config(config_path: Path) -> dict[str, Any]:
+    """マッピング設定ファイル（JSON）を読み込み、検証する。"""
+    if not config_path.exists():
+        raise FileNotFoundError(f"設定ファイルが見つかりません: {config_path}")
+
+    text = config_path.read_text(encoding="utf-8")
+    config = json.loads(text)
+
+    # 必須キーの存在チェック
+    if "fields" not in config or not isinstance(config["fields"], dict):
+        raise ValueError("設定ファイルに 'fields' オブジェクトが必要です")
+
+    if not config["fields"]:
+        raise ValueError("'fields' にフィールド定義が1つ以上必要です")
+
+    # 各フィールド定義の検証
+    valid_types = {"str", "int", "float", "date", "bool"}
+    for field_name, spec in config["fields"].items():
+        if "source" not in spec:
+            raise ValueError(f"フィールド '{field_name}' に 'source' が未定義です")
+        field_type = spec.get("type", "str")
+        if field_type not in valid_types:
+            raise ValueError(
+                f"フィールド '{field_name}' の type '{field_type}' は無効です "
+                f"(有効: {', '.join(sorted(valid_types))})"
+            )
+
+    logging.info(f"設定ファイル読み込み完了: {config_path.name} "
+                 f"(テーブル: {config.get('table_name', '未指定')}, "
+                 f"フィールド数: {len(config['fields'])})")
+
+    return config
 
 
 # ============================================================
@@ -144,53 +183,6 @@ def load_input(file_path: Path) -> list[dict[str, Any]]:
 
 
 # ============================================================
-# マッピング定義（★ ここをプロジェクトに合わせてカスタマイズ ★）
-# ============================================================
-
-# "oracle_type" / "pg_type": DB固有の型名（CREATE TABLE / キャスト用）
-FIELD_MAP: dict[str, dict[str, Any]] = {
-    "id": {
-        "source": "ID",
-        "type": "int",
-        "required": True,
-        "oracle_type": "NUMBER(10)",
-        "pg_type": "INTEGER",
-    },
-    "name": {
-        "source": "名前",
-        "type": "str",
-        "required": True,
-        "max_len": 200,
-        "oracle_type": "NVARCHAR2(200)",
-        "pg_type": "VARCHAR(200)",
-    },
-    "email": {
-        "source": "メールアドレス",
-        "type": "str",
-        "required": False,
-        "max_len": 254,
-        "oracle_type": "NVARCHAR2(254)",
-        "pg_type": "VARCHAR(254)",
-    },
-    "created_at": {
-        "source": "作成日",
-        "type": "date",
-        "required": False,
-        "oracle_type": "DATE",
-        "pg_type": "DATE",
-    },
-    "is_active": {
-        "source": "有効",
-        "type": "bool",
-        "required": False,
-        "default": True,
-        "oracle_type": "NUMBER(1)",       # Oracle: 1/0
-        "pg_type": "BOOLEAN",             # PostgreSQL: TRUE/FALSE
-    },
-}
-
-
-# ============================================================
 # バリデーション & 変換
 # ============================================================
 
@@ -244,13 +236,13 @@ def convert_value(value: str | None, field_name: str, spec: dict) -> Any:
 
 
 def transform_record(
-    row: dict[str, Any], row_index: int
+    row: dict[str, Any], row_index: int, field_map: dict[str, dict]
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """1行を変換する。成功時は変換後dictを、失敗時はNoneとエラーリストを返す。"""
     errors: list[str] = []
     result: dict[str, Any] = {}
 
-    for dest_field, spec in FIELD_MAP.items():
+    for dest_field, spec in field_map.items():
         source_col = spec.get("source")
         raw_value = row.get(source_col) if source_col else None
         try:
@@ -276,12 +268,14 @@ def output_json(records: list[dict], output_path: Path) -> None:
     logging.info(f"JSON出力: {output_path} ({len(records)}件)")
 
 
-def _format_sql_value(v: Any, field_name: str, dialect: str) -> str:
+def _format_sql_value(
+    v: Any, field_name: str, dialect: str, field_map: dict[str, dict]
+) -> str:
     """値を指定DB方言のSQLリテラルに変換する。"""
     if v is None:
         return "NULL"
 
-    spec = FIELD_MAP.get(field_name, {})
+    spec = field_map.get(field_name, {})
     field_type = spec.get("type", "str")
 
     # 真偽値: Oracle=1/0, PostgreSQL=TRUE/FALSE
@@ -305,7 +299,6 @@ def _format_sql_value(v: Any, field_name: str, dialect: str) -> str:
 
     # 文字列
     escaped = str(v).replace("'", "''")
-    # Oracle: NVARCHARリテラルにはN接頭辞
     if dialect == "oracle":
         return f"N'{escaped}'"
     return f"'{escaped}'"
@@ -316,6 +309,7 @@ def output_sql(
     output_path: Path,
     table_name: str,
     dialect: str,
+    field_map: dict[str, dict],
 ) -> None:
     """変換済みレコードをDB方言に応じたSQLインサート文として出力する。"""
     if not records:
@@ -326,14 +320,13 @@ def output_sql(
     columns = list(records[0].keys())
     col_str = ", ".join(columns)
 
-    # ヘッダーコメント
     db_label = "Oracle" if dialect == "oracle" else "PostgreSQL"
     lines.append(f"-- データ移行ツール生成 ({db_label})")
     lines.append(f"-- 生成日時: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"-- テーブル: {table_name}")
     lines.append(f"-- レコード数: {len(records)}")
     lines.append("")
 
-    # PostgreSQL: トランザクション囲み
     if dialect == "postgresql":
         lines.append("BEGIN;")
         lines.append("")
@@ -341,7 +334,7 @@ def output_sql(
     for rec in records:
         values = []
         for col in columns:
-            values.append(_format_sql_value(rec[col], col, dialect))
+            values.append(_format_sql_value(rec[col], col, dialect, field_map))
         val_str = ", ".join(values)
         lines.append(f"INSERT INTO {table_name} ({col_str}) VALUES ({val_str});")
 
@@ -349,7 +342,6 @@ def output_sql(
         lines.append("")
         lines.append("COMMIT;")
 
-    # Oracle: 明示COMMIT
     if dialect == "oracle":
         lines.append("")
         lines.append("COMMIT;")
@@ -359,7 +351,7 @@ def output_sql(
 
 
 def output_create_table(
-    output_path: Path, table_name: str, dialect: str
+    output_path: Path, table_name: str, dialect: str, field_map: dict[str, dict]
 ) -> None:
     """CREATE TABLE文を出力する（参考用）。"""
     type_key = "oracle_type" if dialect == "oracle" else "pg_type"
@@ -370,9 +362,8 @@ def output_create_table(
         f"CREATE TABLE {table_name} (",
     ]
     col_defs = []
-    for col_name, spec in FIELD_MAP.items():
+    for col_name, spec in field_map.items():
         col_type = spec.get(type_key, "VARCHAR(255)")
-        nullable = "" if spec.get("required") else " NULL"
         not_null = " NOT NULL" if spec.get("required") else ""
         col_defs.append(f"    {col_name} {col_type}{not_null}")
 
@@ -394,6 +385,7 @@ def run(
     error_log_path: Path,
     table_name: str,
     dialect: str,
+    field_map: dict[str, dict],
     create_table_path: Path | None,
 ) -> None:
     """移行処理のメインエントリポイント。"""
@@ -406,7 +398,7 @@ def run(
     all_errors: list[str] = []
 
     for i, row in enumerate(rows, start=1):
-        record, errors = transform_record(row, i)
+        record, errors = transform_record(row, i, field_map)
         if record is not None:
             converted.append(record)
         else:
@@ -416,11 +408,11 @@ def run(
     if output_format == "json":
         output_json(converted, output_path)
     else:
-        output_sql(converted, output_path, table_name, dialect)
+        output_sql(converted, output_path, table_name, dialect, field_map)
 
     # CREATE TABLE文出力（オプション）
     if create_table_path:
-        output_create_table(create_table_path, table_name, dialect)
+        output_create_table(create_table_path, table_name, dialect, field_map)
 
     # エラーログ出力
     if all_errors:
@@ -438,9 +430,14 @@ def run(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="データ移行ツール — エクスポートデータをウェブアプリ用DBに変換"
+        description="データ移行ツール - エクスポートデータをウェブアプリ用DBに変換"
     )
     parser.add_argument("input", help="入力ファイルパス (CSV/TSV/JSON/XML)")
+    parser.add_argument(
+        "-c", "--config",
+        required=True,
+        help="マッピング設定ファイルパス (JSON)",
+    )
     parser.add_argument(
         "-o", "--output",
         default="output.json",
@@ -465,8 +462,8 @@ def main() -> None:
     )
     parser.add_argument(
         "-t", "--table",
-        default="imported_data",
-        help="SQL出力時のテーブル名 (デフォルト: imported_data)",
+        default=None,
+        help="SQL出力時のテーブル名 (省略時は設定ファイルの table_name を使用)",
     )
     parser.add_argument(
         "--create-table",
@@ -488,10 +485,18 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
+    # 入力ファイル確認
     input_path = Path(args.input)
     if not input_path.exists():
         logging.error(f"入力ファイルが見つかりません: {input_path}")
         sys.exit(1)
+
+    # 設定ファイル読み込み
+    config = load_config(Path(args.config))
+    field_map = config["fields"]
+
+    # テーブル名: 引数 > 設定ファイル > デフォルト
+    table_name = args.table or config.get("table_name", "imported_data")
 
     create_table_path = Path(args.create_table) if args.create_table else None
 
@@ -500,8 +505,9 @@ def main() -> None:
         output_path=Path(args.output),
         output_format=args.format,
         error_log_path=Path(args.error_log),
-        table_name=args.table,
+        table_name=table_name,
         dialect=args.dialect,
+        field_map=field_map,
         create_table_path=create_table_path,
     )
 

@@ -22,33 +22,195 @@ import java.util.stream.Collectors;
  *
  * <p>対応入力: CSV, TSV, JSON, XML
  * <p>対応出力: JSON, Oracle SQL, PostgreSQL SQL
+ * <p>マッピング: 外部設定ファイル（mapping_config.json）で定義
  */
 public class DataMigrationTool {
 
     // ============================================================
-    // フィールド定義（★ プロジェクトに合わせてカスタマイズ ★）
+    // フィールド定義
     // ============================================================
 
     enum FieldType { STR, INT, FLOAT, DATE, BOOL }
 
     record FieldSpec(
-        String source,       // 元データのカラム名
+        String source,
         FieldType type,
         boolean required,
         Object defaultValue,
-        int maxLen,          // 0 = 制限なし
+        int maxLen,
         String oracleType,
         String pgType
     ) {}
 
-    /** 移行先カラム名 → フィールド仕様 */
-    static final LinkedHashMap<String, FieldSpec> FIELD_MAP = new LinkedHashMap<>();
-    static {
-        FIELD_MAP.put("id",         new FieldSpec("ID",           FieldType.INT,  true,  null, 0,   "NUMBER(10)",      "INTEGER"));
-        FIELD_MAP.put("name",       new FieldSpec("名前",         FieldType.STR,  true,  null, 200, "NVARCHAR2(200)",  "VARCHAR(200)"));
-        FIELD_MAP.put("email",      new FieldSpec("メールアドレス", FieldType.STR,  false, null, 254, "NVARCHAR2(254)",  "VARCHAR(254)"));
-        FIELD_MAP.put("created_at", new FieldSpec("作成日",        FieldType.DATE, false, null, 0,   "DATE",            "DATE"));
-        FIELD_MAP.put("is_active",  new FieldSpec("有効",          FieldType.BOOL, false, true, 0,   "NUMBER(1)",       "BOOLEAN"));
+    /** 設定ファイルから読み込んだフィールドマップ（実行時に設定） */
+    static LinkedHashMap<String, FieldSpec> fieldMap = new LinkedHashMap<>();
+
+    // ============================================================
+    // 設定ファイル読み込み
+    // ============================================================
+
+    record MigrationConfig(String tableName, LinkedHashMap<String, FieldSpec> fields) {}
+
+    static MigrationConfig loadConfig(Path configPath) throws IOException {
+        if (!Files.exists(configPath)) {
+            throw new FileNotFoundException("設定ファイルが見つかりません: " + configPath);
+        }
+
+        String text = Files.readString(configPath, StandardCharsets.UTF_8);
+        if (text.startsWith("\uFEFF")) text = text.substring(1);
+
+        return parseConfigManually(text, configPath);
+    }
+
+    private static MigrationConfig parseConfigManually(String json, Path configPath) {
+        // 軽量な設定ファイルパーサー
+        String tableName = extractStringValue(json, "table_name", "imported_data");
+        String fieldsBlock = extractObjectBlock(json, "fields");
+
+        if (fieldsBlock == null || fieldsBlock.isBlank()) {
+            throw new RuntimeException("設定ファイルに 'fields' オブジェクトが必要です");
+        }
+
+        LinkedHashMap<String, FieldSpec> fields = new LinkedHashMap<>();
+        // フィールドブロックから各フィールドを抽出
+        int pos = 0;
+        while (pos < fieldsBlock.length()) {
+            // 次のフィールド名を検索
+            int keyStart = fieldsBlock.indexOf('"', pos);
+            if (keyStart < 0) break;
+            int keyEnd = fieldsBlock.indexOf('"', keyStart + 1);
+            if (keyEnd < 0) break;
+            String fieldName = fieldsBlock.substring(keyStart + 1, keyEnd);
+
+            // フィールド定義のオブジェクトブロックを取得
+            int objStart = fieldsBlock.indexOf('{', keyEnd);
+            if (objStart < 0) break;
+            int objEnd = findMatchingBrace(fieldsBlock, objStart);
+            if (objEnd < 0) break;
+            String fieldJson = fieldsBlock.substring(objStart, objEnd + 1);
+
+            String source = extractStringValue(fieldJson, "source", "");
+            String typeStr = extractStringValue(fieldJson, "type", "str");
+            boolean required = extractBoolValue(fieldJson, "required", false);
+            int maxLen = extractIntValue(fieldJson, "max_len", 0);
+            String oracleType = extractStringValue(fieldJson, "oracle_type", "VARCHAR2(255)");
+            String pgType = extractStringValue(fieldJson, "pg_type", "VARCHAR(255)");
+
+            // default値の処理
+            Object defaultValue = null;
+            String defaultStr = extractRawValue(fieldJson, "default");
+            if (defaultStr != null && !defaultStr.equals("null")) {
+                FieldType ft = parseFieldType(typeStr);
+                switch (ft) {
+                    case BOOL -> defaultValue = defaultStr.equals("true");
+                    case INT -> { try { defaultValue = Integer.parseInt(defaultStr); } catch (NumberFormatException ignored) {} }
+                    case FLOAT -> { try { defaultValue = Double.parseDouble(defaultStr); } catch (NumberFormatException ignored) {} }
+                    default -> defaultValue = defaultStr.replace("\"", "");
+                }
+            }
+
+            FieldType type = parseFieldType(typeStr);
+            fields.put(fieldName, new FieldSpec(source, type, required, defaultValue, maxLen, oracleType, pgType));
+
+            pos = objEnd + 1;
+        }
+
+        if (fields.isEmpty()) {
+            throw new RuntimeException("'fields' にフィールド定義が1つ以上必要です");
+        }
+
+        Set<String> validTypes = Set.of("str", "int", "float", "date", "bool");
+        System.out.println("[INFO] 設定ファイル読み込み完了: " + configPath.getFileName()
+            + " (テーブル: " + tableName + ", フィールド数: " + fields.size() + ")");
+
+        return new MigrationConfig(tableName, fields);
+    }
+
+    private static FieldType parseFieldType(String typeStr) {
+        return switch (typeStr.toLowerCase()) {
+            case "int" -> FieldType.INT;
+            case "float" -> FieldType.FLOAT;
+            case "date" -> FieldType.DATE;
+            case "bool" -> FieldType.BOOL;
+            default -> FieldType.STR;
+        };
+    }
+
+    // --- 簡易JSON値抽出ヘルパー ---
+
+    private static String extractStringValue(String json, String key, String defaultVal) {
+        String pattern = "\"" + key + "\"";
+        int idx = json.indexOf(pattern);
+        if (idx < 0) return defaultVal;
+        int colonIdx = json.indexOf(':', idx + pattern.length());
+        if (colonIdx < 0) return defaultVal;
+        int quoteStart = json.indexOf('"', colonIdx + 1);
+        // null チェック
+        String afterColon = json.substring(colonIdx + 1, Math.min(colonIdx + 20, json.length())).trim();
+        if (afterColon.startsWith("null")) return defaultVal;
+        if (quoteStart < 0) return defaultVal;
+        int quoteEnd = json.indexOf('"', quoteStart + 1);
+        if (quoteEnd < 0) return defaultVal;
+        return json.substring(quoteStart + 1, quoteEnd);
+    }
+
+    private static boolean extractBoolValue(String json, String key, boolean defaultVal) {
+        String raw = extractRawValue(json, key);
+        if (raw == null) return defaultVal;
+        return raw.trim().equals("true");
+    }
+
+    private static int extractIntValue(String json, String key, int defaultVal) {
+        String raw = extractRawValue(json, key);
+        if (raw == null) return defaultVal;
+        try { return Integer.parseInt(raw.trim()); } catch (NumberFormatException e) { return defaultVal; }
+    }
+
+    private static String extractRawValue(String json, String key) {
+        String pattern = "\"" + key + "\"";
+        int idx = json.indexOf(pattern);
+        if (idx < 0) return null;
+        int colonIdx = json.indexOf(':', idx + pattern.length());
+        if (colonIdx < 0) return null;
+        int start = colonIdx + 1;
+        while (start < json.length() && json.charAt(start) == ' ') start++;
+        if (start >= json.length()) return null;
+        // 文字列の場合
+        if (json.charAt(start) == '"') {
+            int end = json.indexOf('"', start + 1);
+            return end >= 0 ? json.substring(start + 1, end) : null;
+        }
+        // 非文字列: カンマ、改行、}まで
+        int end = start;
+        while (end < json.length() && json.charAt(end) != ',' && json.charAt(end) != '}'
+               && json.charAt(end) != '\n' && json.charAt(end) != '\r') {
+            end++;
+        }
+        return json.substring(start, end).trim();
+    }
+
+    private static String extractObjectBlock(String json, String key) {
+        String pattern = "\"" + key + "\"";
+        int idx = json.indexOf(pattern);
+        if (idx < 0) return null;
+        int braceStart = json.indexOf('{', idx + pattern.length());
+        if (braceStart < 0) return null;
+        int braceEnd = findMatchingBrace(json, braceStart);
+        if (braceEnd < 0) return null;
+        return json.substring(braceStart + 1, braceEnd);
+    }
+
+    private static int findMatchingBrace(String json, int openPos) {
+        int depth = 0;
+        boolean inString = false;
+        for (int i = openPos; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (c == '"' && (i == 0 || json.charAt(i - 1) != '\\')) inString = !inString;
+            if (inString) continue;
+            if (c == '{') depth++;
+            if (c == '}') { depth--; if (depth == 0) return i; }
+        }
+        return -1;
     }
 
     // ============================================================
@@ -58,39 +220,33 @@ public class DataMigrationTool {
     static Charset detectEncoding(Path path) throws IOException {
         byte[] raw = Files.readAllBytes(path);
 
-        // BOM付きUTF-8
         if (raw.length >= 3 && raw[0] == (byte) 0xEF && raw[1] == (byte) 0xBB && raw[2] == (byte) 0xBF) {
             return StandardCharsets.UTF_8;
         }
-        // BOM付きUTF-16 LE
         if (raw.length >= 2 && raw[0] == (byte) 0xFF && raw[1] == (byte) 0xFE) {
             return StandardCharsets.UTF_16LE;
         }
-        // BOM付きUTF-16 BE
         if (raw.length >= 2 && raw[0] == (byte) 0xFE && raw[1] == (byte) 0xFF) {
             return StandardCharsets.UTF_16BE;
         }
 
-        // UTF-8として試行
         if (isValidUtf8(raw)) {
             return StandardCharsets.UTF_8;
         }
 
-        // Shift-JIS (Windows-31J)
         try {
             Charset ms932 = Charset.forName("MS932");
-            new String(raw, ms932).getBytes(ms932); // ラウンドトリップ確認
+            new String(raw, ms932).getBytes(ms932);
             return ms932;
         } catch (Exception ignored) {}
 
-        // EUC-JP
         try {
             Charset eucjp = Charset.forName("EUC-JP");
             new String(raw, eucjp).getBytes(eucjp);
             return eucjp;
         } catch (Exception ignored) {}
 
-        return StandardCharsets.UTF_8; // フォールバック
+        return StandardCharsets.UTF_8;
     }
 
     private static boolean isValidUtf8(byte[] data) {
@@ -121,13 +277,11 @@ public class DataMigrationTool {
         System.out.println("[INFO] 検出した文字コード: " + charset.name() + " (" + path.getFileName() + ")");
 
         List<String> lines = Files.readAllLines(path, charset);
-        // BOM除去
         if (!lines.isEmpty() && lines.get(0).startsWith("\uFEFF")) {
             lines.set(0, lines.get(0).substring(1));
         }
         if (lines.isEmpty()) return Collections.emptyList();
 
-        // 区切り文字自動判定
         char delimiter = detectDelimiter(lines.get(0));
         String[] headers = splitLine(lines.get(0), delimiter);
 
@@ -163,7 +317,6 @@ public class DataMigrationTool {
     }
 
     private static String[] splitLine(String line, char delimiter) {
-        // クォート対応の簡易CSVパーサー
         List<String> fields = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         boolean inQuotes = false;
@@ -190,7 +343,6 @@ public class DataMigrationTool {
     static List<Map<String, String>> readJson(Path path) throws IOException {
         Charset charset = detectEncoding(path);
         String text = Files.readString(path, charset);
-        // BOM除去
         if (text.startsWith("\uFEFF")) text = text.substring(1);
         return SimpleJsonParser.parseArray(text);
     }
@@ -201,7 +353,6 @@ public class DataMigrationTool {
         if (text.startsWith("\uFEFF")) text = text.substring(1);
 
         javax.xml.parsers.DocumentBuilderFactory factory = javax.xml.parsers.DocumentBuilderFactory.newInstance();
-        // XXE対策
         factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
         factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
         factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
@@ -299,7 +450,7 @@ public class DataMigrationTool {
         List<String> errors = new ArrayList<>();
         Map<String, Object> result = new LinkedHashMap<>();
 
-        for (var entry : FIELD_MAP.entrySet()) {
+        for (var entry : fieldMap.entrySet()) {
             String destField = entry.getKey();
             FieldSpec spec = entry.getValue();
             String rawValue = spec.source() != null ? row.get(spec.source()) : null;
@@ -357,27 +508,23 @@ public class DataMigrationTool {
     static String formatSqlValue(Object v, String fieldName, String dialect) {
         if (v == null) return "NULL";
 
-        FieldSpec spec = FIELD_MAP.get(fieldName);
+        FieldSpec spec = fieldMap.get(fieldName);
         FieldType type = spec != null ? spec.type() : FieldType.STR;
 
-        // 真偽値
         if (type == FieldType.BOOL || v instanceof Boolean) {
             boolean b = v instanceof Boolean ? (Boolean) v : Boolean.parseBoolean(v.toString());
             if ("oracle".equals(dialect)) return b ? "1" : "0";
             return b ? "TRUE" : "FALSE";
         }
 
-        // 数値
         if (v instanceof Number) return v.toString();
 
-        // 日付
         if (type == FieldType.DATE) {
             String escaped = v.toString().replace("'", "''");
             if ("oracle".equals(dialect)) return "TO_DATE('" + escaped + "', 'YYYY-MM-DD')";
             return "'" + escaped + "'::DATE";
         }
 
-        // 文字列
         String escaped = v.toString().replace("'", "''");
         if ("oracle".equals(dialect)) return "N'" + escaped + "'";
         return "'" + escaped + "'";
@@ -396,6 +543,7 @@ public class DataMigrationTool {
 
         StringBuilder sb = new StringBuilder();
         sb.append("-- データ移行ツール生成 (").append(dbLabel).append(")\n");
+        sb.append("-- テーブル: ").append(tableName).append("\n");
         sb.append("-- レコード数: ").append(records.size()).append("\n\n");
 
         if ("postgresql".equals(dialect)) sb.append("BEGIN;\n\n");
@@ -420,7 +568,7 @@ public class DataMigrationTool {
         sb.append("CREATE TABLE ").append(tableName).append(" (\n");
 
         int i = 0;
-        for (var entry : FIELD_MAP.entrySet()) {
+        for (var entry : fieldMap.entrySet()) {
             if (i > 0) sb.append(",\n");
             String colType = "oracle".equals(dialect) ? entry.getValue().oracleType() : entry.getValue().pgType();
             String notNull = entry.getValue().required() ? " NOT NULL" : "";
@@ -439,26 +587,28 @@ public class DataMigrationTool {
     public static void main(String[] args) {
         if (args.length < 1) {
             System.out.println("使用方法: java migration.DataMigrationTool <入力ファイル> [オプション]");
+            System.out.println("  -c <設定ファイル>   マッピング設定ファイル (必須)");
             System.out.println("  -o <出力先>         出力ファイルパス (デフォルト: output.json)");
             System.out.println("  -f json|sql         出力形式 (デフォルト: json)");
             System.out.println("  -d oracle|postgresql SQL方言 (デフォルト: postgresql)");
-            System.out.println("  -t <テーブル名>     テーブル名 (デフォルト: imported_data)");
+            System.out.println("  -t <テーブル名>     テーブル名 (省略時は設定ファイルの値を使用)");
             System.out.println("  -e <エラーログ>     エラーログ出力先 (デフォルト: errors.log)");
             System.out.println("  --create-table <パス>  CREATE TABLE文の出力先");
             System.exit(1);
         }
 
-        // 引数パース
         String inputFile = args[0];
+        String configFile = null;
         String outputFile = "output.json";
         String format = "json";
         String dialect = "postgresql";
-        String tableName = "imported_data";
+        String tableName = null;
         String errorLog = "errors.log";
         String createTable = null;
 
         for (int i = 1; i < args.length; i++) {
             switch (args[i]) {
+                case "-c" -> configFile = args[++i];
                 case "-o" -> outputFile = args[++i];
                 case "-f" -> format = args[++i];
                 case "-d" -> dialect = args[++i];
@@ -469,7 +619,19 @@ public class DataMigrationTool {
             }
         }
 
+        if (configFile == null) {
+            System.err.println("[ERROR] 設定ファイル(-c)は必須です");
+            System.exit(1);
+        }
+
         try {
+            // 設定ファイル読み込み
+            MigrationConfig config = loadConfig(Path.of(configFile));
+            fieldMap = config.fields();
+
+            // テーブル名: 引数 > 設定ファイル > デフォルト
+            if (tableName == null) tableName = config.tableName();
+
             Path inputPath = Path.of(inputFile);
             if (!Files.exists(inputPath)) {
                 System.err.println("[ERROR] 入力ファイルが見つかりません: " + inputPath);
@@ -492,7 +654,6 @@ public class DataMigrationTool {
                 }
             }
 
-            // 出力
             Path outputPath = Path.of(outputFile);
             if ("json".equals(format)) {
                 outputJson(converted, outputPath);
@@ -500,12 +661,10 @@ public class DataMigrationTool {
                 outputSql(converted, outputPath, tableName, dialect);
             }
 
-            // CREATE TABLE
             if (createTable != null) {
                 outputCreateTable(Path.of(createTable), tableName, dialect);
             }
 
-            // エラーログ
             if (!allErrors.isEmpty()) {
                 Files.writeString(Path.of(errorLog), String.join("\n", allErrors) + "\n", StandardCharsets.UTF_8);
                 System.out.println("[WARN] エラー件数: " + allErrors.size() + " → " + errorLog);
@@ -524,7 +683,6 @@ public class DataMigrationTool {
         }
     }
 
-    // カスタム例外
     static class ValidationException extends Exception {
         ValidationException(String message) { super(message); }
     }
