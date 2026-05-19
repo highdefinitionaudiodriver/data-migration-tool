@@ -4,11 +4,31 @@
 
 **Python版** と **Java版** の2言語実装を提供。**外部設定ファイル（JSON）でマッピングを定義**するため、コード変更なしに任意のテーブルに対応できます。
 
+> レガシーシステム刷新や業務アプリ移行の初期段階で、既存データの項目対応・変換エラー・移行リスクを可視化するための診断ツールとして活用できます。
+
+---
+
+## 🎯 これは何？（30秒で）
+
+- **誰のため**：デスクトップ業務アプリの Web 化を進めている情シス／レガシーアプリ刷新の SI ベンダー
+- **何が解決される**：エクスポート CSV をターゲット DB（Oracle / PostgreSQL）に投入可能な形式へ **JSON マッピングのみで安全変換**。コード変更なしに任意のテーブル構造へ対応
+- **なぜ既存ツールではダメか**：ETL ツールは大規模・高額・学習コスト大。小〜中規模の業務データ移行には過剰。本ツールは **Python 版 + Java 版** を提供し、現場の言語スタックに合わせて選べる
+- **使う条件**：Python 3.10+ または Java 17+ / Windows・macOS・Linux
+
+## 💰 想定ユースケース・価格帯
+
+| 用途 | 形態 |
+|---|---|
+| OSS としての利用（自社内 PoC・小規模移行） | 無料（MIT） |
+| 業務アプリ刷新時の **データ変換・移行レポート受託** | 応相談 |
+| 業界特化の追加バリデーション・マッピング開発 | 個別見積もり |
+
 ---
 
 ## Table of Contents
 
 - [Features](#features)
+- [Business Use](#business-use)
 - [Compliance Policy](#compliance-policy)
 - [Architecture](#architecture)
 - [Requirements](#requirements)
@@ -36,6 +56,15 @@
 | **DDL 生成** | `CREATE TABLE` 文を Oracle / PostgreSQL それぞれの方言で自動生成 |
 | **エラーログ** | バリデーション失敗行をスキップし、詳細なエラーログを別ファイルに出力 |
 | **外部依存なし** | Python: 標準ライブラリのみ / Java: 外部ライブラリ不要 |
+
+---
+
+## Business Use
+
+- 旧デスクトップアプリからWebアプリ・クラウドDBへの移行前診断
+- CSV / TSV / JSON / XML の項目対応、型不一致、欠損データの洗い出し
+- Oracle / PostgreSQL への投入SQLとDDLのたたき台生成
+- 移行見積もりに必要なエラー件数・手修正ポイントの可視化
 
 ---
 
@@ -403,3 +432,11 @@ COMMIT;
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+
+---
+
+## 🤝 商用利用・カスタマイズ依頼
+
+- 個人・社内利用は無料（MIT ライセンス）
+- 法人・自治体・SI 向け導入支援、カスタマイズ、診断レポート受託は応相談
+- 連絡先：highdefinitionaudiodriver@gmail.com
